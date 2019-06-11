@@ -18,19 +18,22 @@ var (
 
 	// NodeBits holds the number of bits to use for Node
 	// Remember, you have a total 22 bits to share between Node/Step
-	NodeBits uint8 = 10
+	NodeBits uint8 = 5
+
+	DataCenterBits uint8 = 5
+
+	MaxNodes = 31   // 2 ^ NodeBits - 1
+	MaxDCs = 31     // 2 ^ DCBits - 1
 
 	// StepBits holds the number of bits to use for Step
 	// Remember, you have a total 22 bits to share between Node/Step
 	StepBits uint8 = 12
 
-	// DEPRECATED: the below four variables will be removed in a future release.
-	mu        sync.Mutex
-	nodeMax   int64 = -1 ^ (-1 << NodeBits)
-	nodeMask        = nodeMax << StepBits
-	stepMask  int64 = -1 ^ (-1 << StepBits)
-	timeShift       = NodeBits + StepBits
+	stepMask  = int64(-1) ^ (int64(-1) << StepBits)
 	nodeShift       = StepBits
+	dataCenterShift = nodeShift + NodeBits
+	timeShift       = dataCenterShift + DataCenterBits
+
 )
 
 const encodeBase32Map = "ybndrfg8ejkmcpqxot1uwisza345h769"
@@ -82,13 +85,8 @@ type Node struct {
 	epoch time.Time
 	time  int64
 	node  int64
+	dc    int64
 	step  int64
-
-	nodeMax   int64
-	nodeMask  int64
-	stepMask  int64
-	timeShift uint8
-	nodeShift uint8
 }
 
 // An ID is a custom type used for a snowflake ID.  This is used so we can
@@ -97,29 +95,13 @@ type ID int64
 
 // NewNode returns a new snowflake node that can be used to generate snowflake
 // IDs
-func NewNode(node int64) (*Node, error) {
-
-	// re-calc in case custom NodeBits or StepBits were set
-	// DEPRECATED: the below block will be removed in a future release.
-	mu.Lock()
-	nodeMax = -1 ^ (-1 << NodeBits)
-	nodeMask = nodeMax << StepBits
-	stepMask = -1 ^ (-1 << StepBits)
-	timeShift = NodeBits + StepBits
-	nodeShift = StepBits
-	mu.Unlock()
-
-	n := Node{}
-	n.node = node
-	n.nodeMax = -1 ^ (-1 << NodeBits)
-	n.nodeMask = n.nodeMax << StepBits
-	n.stepMask = -1 ^ (-1 << StepBits)
-	n.timeShift = NodeBits + StepBits
-	n.nodeShift = StepBits
-
-	if n.node < 0 || n.node > n.nodeMax {
-		return nil, errors.New("Node number must be between 0 and " + strconv.FormatInt(n.nodeMax, 10))
+func NewNode(node int, dc int) (*Node, error) {
+	if node > MaxNodes || dc > MaxDCs {
+		return nil, errors.New("node or dc should < 2^5-1")
 	}
+	n := Node{}
+	n.node = int64(node)
+	n.dc = int64(dc)
 
 	var curTime = time.Now()
 	// add time.Duration to curTime to make sure we use the monotonic clock if available
@@ -139,7 +121,7 @@ func (n *Node) Generate() ID {
 	now := time.Since(n.epoch).Nanoseconds() / 1000000
 
 	if now == n.time {
-		n.step = (n.step + 1) & n.stepMask
+		n.step = (n.step + 1) & stepMask
 
 		if n.step == 0 {
 			for now <= n.time {
@@ -152,8 +134,9 @@ func (n *Node) Generate() ID {
 
 	n.time = now
 
-	r := ID((now)<<n.timeShift |
-		(n.node << n.nodeShift) |
+	r := ID((now)<<timeShift |
+		(n.node << nodeShift) |
+		(n.dc << dataCenterShift) |
 		(n.step),
 	)
 
@@ -320,24 +303,6 @@ func (f ID) IntBytes() [8]byte {
 // a snowflake ID
 func ParseIntBytes(id [8]byte) ID {
 	return ID(int64(binary.BigEndian.Uint64(id[:])))
-}
-
-// Time returns an int64 unix timestamp in milliseconds of the snowflake ID time
-// DEPRECATED: the below function will be removed in a future release.
-func (f ID) Time() int64 {
-	return (int64(f) >> timeShift) + Epoch
-}
-
-// Node returns an int64 of the snowflake ID node number
-// DEPRECATED: the below function will be removed in a future release.
-func (f ID) Node() int64 {
-	return int64(f) & nodeMask >> nodeShift
-}
-
-// Step returns an int64 of the snowflake step (or sequence) number
-// DEPRECATED: the below function will be removed in a future release.
-func (f ID) Step() int64 {
-	return int64(f) & stepMask
 }
 
 // MarshalJSON returns a json byte array string of the snowflake ID.
